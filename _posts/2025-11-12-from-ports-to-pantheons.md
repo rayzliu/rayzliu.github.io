@@ -11,7 +11,7 @@ Similarly, few people spend much time thinking about Greek mythology anymore: th
 
 The shift to monotheism simplified faith. It lowered the barrier to entry, consolidating spiritual power into one source of truth. The evolution of the USB port followed a similar logic: one interface to rule them all. It replaced a chaotic menagerie of ports with a single, all-purpose connector. Just plug and play, and the omnipotent USB will fulfill your wish—keyboard, storage, charging, you name it. Universality delivered users from the confusion of specialized connectors, much like monotheism delivered believers from the clutter of gods.
 
-![The Pantheon](_posts/2025-11-12_media/pantheon.webp)
+![The Pantheon](assets/pantheon.webp)
 _The Pantheon in Rome, once a temple to many gods, was later re-consecrated as a church devoted to one._
 
 But universality has its price. The USB port is terrible at distinguishing what it connects to. Every device plugs into the same interface, so the computer must simply **trust** the device to declare what it is. Since a computer assigns different levels of trust to different kinds of devices, and the device gets to decide what the computer thinks it is, a loophole was born.
