@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Gerrymander — Turn-Based Commissioner</title>
+<style>
+  :root{
+    --bg:#f8fbff;
+    --panel:#0b1220;
+    --muted:#6b7f98;
+  }
+  body { background:var(--bg); color:#071329; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:14px; }
+  h1 { margin:4px 0 10px 0; font-size:20px; color:#04102a; }
+  #main { display:flex; gap:14px; align-items:flex-start; }
+  #stage { background:white; padding:8px; border-radius:8px; box-shadow:0 8px 30px rgba(3,10,20,0.08); }
+  canvas { border-radius:6px; display:block; background:white; cursor:crosshair; }
+  #hud { width:360px; }
+  .panel { background:#ffffff; border-radius:10px; padding:12px; box-shadow:0 6px 18px rgba(10,20,30,0.04); margin-bottom:12px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  button { background:#0b1220; color:white; border:0; padding:8px 10px; border-radius:8px; cursor:pointer; }
+  button.secondary{ background:#e6eef8; color:#071329; border:1px solid #d3e1f1; }
+  button.important{ background:#ff4d4d; }
+  label { color:var(--muted); font-size:13px; }
+  input[type=range] { width:100%; }
+  .stat { font-weight:700; font-size:16px; color:#071329; }
+  .legend { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--muted); }
+  .dot { width:14px; height:14px; border-radius:50%; display:inline-block; }
+  #message { padding:8px; border-radius:8px; background:#fbfbff; color:#071329; font-size:13px; }
+  footer { font-size:12px; color:#6b7f98; margin-top:6px; }
+</style>
+</head>
+<body>
+  <h1>Gerrymander — Turn-Based Redistricting Commissioner</h1>
+  <div id="main">
+    <div id="stage" class="panel" style="width:900px;">
+      <canvas id="map" width="900" height="640"></canvas>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center; justify-content:space-between;">
+        <div style="color:#6b7f98; font-size:13px">Drag seeds to redraw districts. When ready, press <strong>Call Election</strong>.</div>
+        <div style="display:flex; gap:8px;">
+          <button id="resetBtn" class="secondary">New State</button>
+          <button id="callBtn">Call Election</button>
+        </div>
+      </div>
+    </div>
+
+    <aside id="hud">
+      <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-size:13px; color:#6b7f98">Round</div>
+            <div id="roundNum" class="stat">1</div>
+          </div>
+          <div>
+            <div style="font-size:13px; color:#6b7f98">Player Side</div>
+            <div id="playerSideLabel" class="stat">Liberal</div>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <div style="display:flex; justify-content:space-between; gap:8px;">
+            <div>
+              <div style="font-size:13px; color:#6b7f98">Seats (You)</div>
+              <div id="seatsYou" class="stat">-</div>
+            </div>
+            <div>
+              <div style="font-size:13px; color:#6b7f98">Seats (Opp)</div>
+              <div id="seatsOpp" class="stat">-</div>
+            </div>
+            <div>
+              <div style="font-size:13px; color:#6b7f98">Majority</div>
+              <div id="majority" class="stat">-</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
+          <div style="flex:1">
+            <label>Number of Districts: <strong id="districtCountLabel">7</strong></label>
+            <input id="districtCount" type="range" min="3" max="13" step="1" value="7">
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <label>Choose side:</label>
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button id="chooseL" class="secondary">Liberal (Red)</button>
+            <button id="chooseC" class="secondary">Conservative (Blue)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div style="font-weight:700; margin-bottom:8px">Legend & Mechanics</div>
+        <div class="legend"><div class="dot" style="background:#ff5b5b"></div> Liberal strong (≥60%)</div>
+        <div class="legend" style="margin-top:6px;"><div class="dot" style="background:#3b7bff"></div> Conservative strong (≤40%)</div>
+        <div class="legend" style="margin-top:6px;"><div class="dot" style="background:#a04bff"></div> Swing (40–60%) — randomized on election</div>
+        <div style="margin-top:10px" id="message">Infinite time — redraw until you're ready. Tiles are colored by ideology; opacity = population density.</div>
+      </div>
+
+      <div class="panel">
+        <div style="font-weight:700">Population legend</div>
+        <div style="font-size:13px; color:#6b7f98; margin-top:6px">Tiles are drawn over a white canvas. More opaque tiles mean higher population (metropolises).</div>
+      </div>
+
+      <footer>Fictional state generator — metropolitan -> liberal, farmland -> conservative. Swing districts are probabilistic.</footer>
+    </aside>
+  </div>
+
+<script>
+/*
+ Turn-based Gerrymander prototype
+ - Static state per round; infinite time to edit
+ - Population density (metropolises) and ideology reflect metropolis->liberal, farmland->conservative
+ - Population shown as tile opacity (against white); district results weighted by population
+ - Swing districts (40-60%) are randomized at election according to support probability
+ - Player can choose liberal or conservative at start/any round
+*/
+
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+let W = canvas.width, H = canvas.height;
+
+// grid resolution
+let GRID_W = 90;
+let GRID_H = 64;
+let CELL_W = W / GRID_W;
+let CELL_H = H / GRID_H;
+
+// game state
+let districtCount = parseInt(document.getElementById('districtCount').value);
+let seeds = [];
+let assignment = new Int16Array(GRID_W * GRID_H);
+let liberalSupport = new Float32Array(GRID_W * GRID_H); // 0..1 liberal support per cell
+let population = new Float32Array(GRID_W * GRID_H); // population count per cell (un-normalized)
+let popNorm = new Float32Array(GRID_W * GRID_H); // normalized 0..1 for opacity
+let roundNum = 1;
+let playerIsLiberal = true;
+let gameOver = false;
+
+// UI
+const resetBtn = document.getElementById('resetBtn');
+const callBtn = document.getElementById('callBtn');
+const districtSlider = document.getElementById('districtCount');
+const districtCountLabel = document.getElementById('districtCountLabel');
+const roundNumEl = document.getElementById('roundNum');
+const seatsYouEl = document.getElementById('seatsYou');
+const seatsOppEl = document.getElementById('seatsOpp');
+const majorityEl = document.getElementById('majority');
+const playerSideLabel = document.getElementById('playerSideLabel');
+const chooseL = document.getElementById('chooseL');
+const chooseC = document.getElementById('chooseC');
+const messageEl = document.getElementById('message');
+
+// helpers
+function idx(x,y){ return y*GRID_W + x; }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function randRange(a,b){ return a + Math.random()*(b-a); }
+
+// color map for liberalSupport
+function heatColor(v){
+  // 0 -> blue, 0.5 -> purple-ish yellow? We'll produce recognizable colors:
+  // map 0..1 to gradient blue -> purple -> red
+  v = clamp(v,0,1);
+  // simple three-point interpolate
+  if(v < 0.5){
+    const t = v / 0.5;
+    // blue (59,123,255) -> purple (160,75,255)
+    const r = Math.round(59 + (160-59)*t);
+    const g = Math.round(123 + (75-123)*t);
+    const b = Math.round(255);
+    return `rgb(${r},${g},${b})`;
+  } else {
+    const t = (v-0.5)/0.5;
+    // purple -> red (255,91,91)
+    const r = Math.round(160 + (255-160)*t);
+    const g = Math.round(75 + (91-75)*t);
+    const b = Math.round(255 - (255-91)*t);
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
+// Generate a new fictional state with metropolis clusters and farmland
+function generateState() {
+  gameOver = false;
+  // grid sizes & cell sizes (allowing some variability)
+  CELL_W = W / GRID_W;
+  CELL_H = H / GRID_H;
+
+  // 1) create population density via several gaussian metropolis peaks
+  const metroCount = Math.floor(randRange(2, 5)); // 2-4 metros
+  const metros = [];
+  for(let i=0;i<metroCount;i++){
+    metros.push({
+      x: randRange(0.15, 0.85) * W,
+      y: randRange(0.12, 0.88) * H,
+      strength: randRange(13,15),      // relative pop intensity
+      spread: randRange(30, 40)           // smaller = denser, larger = sprawling
+    });
+  }
+
+  // base farmland population (low)
+  const basePop = 1.0;
+
+  // 2) set population and ideological base (liberal support)
+  let maxPop = 0;
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const px = x*CELL_W + CELL_W/2;
+      const py = y*CELL_H + CELL_H/2;
+
+      // population: sum of gaussian contributions from metros + small rural baseline
+      let pop = basePop * randRange(0.4, 1.0); // rural baseline varies slightly
+      for(const m of metros){
+        const dx = px - m.x;
+        const dy = py - m.y;
+        const d2 = dx*dx + dy*dy;
+        pop += m.strength * Math.exp(-d2 / (2 * m.spread * m.spread));
+      }
+
+      // normalize some randomness
+      pop *= (0.6 + 0.8*Math.random());
+      population[idx(x,y)] = pop;
+      if(pop > maxPop) maxPop = pop;
+    }
+  }
+  var ref=Math.log2( maxPop+0.7)/Math.log2(13)
+  // normalize population to 0..1 for tile opacity
+  for(let i=0;i<population.length;i++){
+    popNorm[i] = Math.log2( population[i]+0.7)/ Math.log2(13)/ ref;
+  }
+
+  // ideology generation:
+  // near metros -> liberal bias; far from metros -> conservative bias
+  // compute liberal base as weighted average of gaussian contributions normalized
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const px = x*CELL_W + CELL_W/2;
+      const py = y*CELL_H + CELL_H/2;
+
+      // compute metro influence
+      let influenceSum = 0;
+      let weightedLiberal = 0;
+      for(const m of metros){
+        const dx = px - m.x;
+        const dy = py - m.y;
+        const d2 = dx*dx + dy*dy;
+        const influence = m.strength * Math.exp(-d2 / (2 * m.spread * m.spread));
+        influenceSum += influence;
+        // metros are liberal-leaning (value near 0.75)
+        weightedLiberal += influence * randRange(0.62, 0.86);
+      }
+      // farmland bias: where there is low metro influence, tilt conservative (~0.32)
+      const farmlandBias = randRange(0.22, 0.42);
+
+      // combine: if influenceSum > threshold, use weightedLiberal; else farmland
+      let base;
+      if(influenceSum > 0.02) {
+        base = (weightedLiberal + farmlandBias*0.4) / (influenceSum + 0.4);
+      } else {
+        base = farmlandBias;
+      }
+
+      // factor population: in metros (high pop) move base slightly toward metro ideology more strongly
+      const pscalar = popNorm[idx(x,y)]; // 0..1
+      const liberal = clamp(base * (0.6 + 0.8*pscalar) + (Math.random()-0.5)*0.08, 0.02, 0.98);
+      liberalSupport[idx(x,y)] = liberal;
+    }
+  }
+
+  // seed districts (spread seeds across map)
+  seeds = [];
+  for(let i=0;i<districtCount;i++){
+    seeds.push({
+      x: (0.08 + 0.84*(i+0.5)/districtCount) * W + (Math.random()-0.5)*60,
+      y: (0.12 + 0.76*Math.random()) * H,
+      id: i
+    });
+  }
+
+  computeAssignment();
+  updateHUD();
+  draw();
+}
+
+// compute Voronoi assignment by nearest seed
+function computeAssignment() {
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const px = x*CELL_W + CELL_W/2;
+      const py = y*CELL_H + CELL_H/2;
+      let best = -1, bestd = Infinity;
+      for(let s=0;s<seeds.length;s++){
+        const dx = seeds[s].x - px;
+        const dy = seeds[s].y - py;
+        const d = dx*dx + dy*dy;
+        if(d < bestd){ bestd = d; best = s; }
+      }
+      assignment[idx(x,y)] = best;
+    }
+  }
+}
+
+// compute district stats: population-weighted liberal support average and totals
+function computeDistrictStats() {
+  const totals = new Array(seeds.length).fill(0);
+  const pops = new Array(seeds.length).fill(0);
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const id = assignment[idx(x,y)];
+      const pop = population[idx(x,y)];
+      pops[id] += pop;
+      totals[id] += liberalSupport[idx(x,y)] * pop;
+    }
+  }
+  const avg = new Array(seeds.length).fill(0);
+  for(let i=0;i<seeds.length;i++){
+    avg[i] = pops[i] > 0 ? totals[i] / pops[i] : 0.5;
+  }
+  return { avg, pops };
+}
+
+// draw grid and districts
+function draw() {
+  ctx.clearRect(0,0,W,H);
+
+  // canvas background white (already)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0,0,W,H);
+
+  // draw cells: color = ideology; globalAlpha = popNorm scaled
+
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const i = idx(x,y);
+      const color = heatColor(liberalSupport[i]);
+      const a = clamp(popNorm[i], 0.06, 0.98); // low-pop tiles nearly white, high-pop very opaque
+      ctx.globalAlpha = a;
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.round(x*CELL_W), Math.round(y*CELL_H), Math.ceil(CELL_W), Math.ceil(CELL_H));
+    }
+  }
+  ctx.globalAlpha = 1.0;
+
+  // district tints: lightly outline district boundaries
+  ctx.lineWidth = 1.3;
+  ctx.strokeStyle = 'rgba(8,10,14,0.6)';
+  ctx.beginPath();
+  for(let y=0;y<GRID_H;y++){
+    for(let x=0;x<GRID_W;x++){
+      const id = assignment[idx(x,y)];
+      if(x < GRID_W-1 && assignment[idx(x+1,y)] !== id) {
+        const sx = (x+1)*CELL_W;
+        ctx.moveTo(sx, y*CELL_H); ctx.lineTo(sx, (y+1)*CELL_H);
+      }
+      if(y < GRID_H-1 && assignment[idx(x,y+1)] !== id) {
+        const sy = (y+1)*CELL_H;
+        ctx.moveTo(x*CELL_W, sy); ctx.lineTo((x+1)*CELL_W, sy);
+      }
+    }
+  }
+  ctx.stroke();
+
+  // district classification highlights (60/40 thresholds)
+  const stats = computeDistrictStats();
+  for(let i=0;i<seeds.length;i++){
+    const s = seeds[i];
+    const avg = stats.avg[i];
+    let hueColor = null;
+    if(avg >= 0.6) hueColor = '#ff5b5b';      // liberal strong
+    else if(avg <= 0.4) hueColor = '#3b7bff'; // conservative strong
+    else hueColor = '#a04bff';               // swing
+
+    // draw a semi-transparent halo around seed representing district strength
+    ctx.beginPath();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = hueColor;
+    ctx.globalAlpha = 0.28;
+    ctx.arc(s.x, s.y, 20, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+  }
+
+  // draw seeds
+  for(let i=0;i<seeds.length;i++){
+    const s = seeds[i];
+    ctx.beginPath();
+    ctx.fillStyle = '#041025';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.6;
+    ctx.arc(s.x, s.y, 10, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+
+    // inner dot colored by district majority classification
+    const avg = stats.avg[i];
+    let fill = '#a04bff';
+    if(avg >= 0.6) fill = '#ff5b5b';
+    else if(avg <= 0.4) fill = '#3b7bff';
+    ctx.beginPath();
+    ctx.fillStyle = fill;
+    ctx.arc(s.x, s.y, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// election mechanics: when player calls election
+function conductElection() {
+  if(gameOver) return;
+  computeAssignment();
+  const { avg } = computeDistrictStats();
+  let liberalSeats = 0, conservativeSeats = 0;
+  const districtOutcomes = [];
+  for(let i=0;i<avg.length;i++){
+    const a = avg[i];
+    if(a >= 0.6) { // liberal strong
+      liberalSeats++;
+      districtOutcomes.push('L');
+    } else if(a <= 0.4) { // conservative strong
+      conservativeSeats++;
+      districtOutcomes.push('C');
+    } else {
+      // swing: randomize outcome based on probability = liberal support
+      const r = Math.random();
+      if(r < a) { liberalSeats++; districtOutcomes.push('L'); }
+      else { conservativeSeats++; districtOutcomes.push('C'); }
+    }
+  }
+
+  // determine player's seats
+  const playerSeats = playerIsLiberal ? liberalSeats : conservativeSeats;
+  const oppSeats = districtCount - playerSeats;
+  seatsYouEl.textContent = playerSeats + ' / ' + districtCount;
+  seatsOppEl.textContent = oppSeats + ' / ' + districtCount;
+  majorityEl.textContent = Math.floor(districtCount/2) + 1;
+
+  // win/lose
+  if(playerSeats >= Math.floor(districtCount/2) + 1) {
+    messageEl.textContent = `Victory! You held the majority (${playerSeats}/${districtCount}). Generating a new state...`;
+    // advance round and generate new state after a quick visual flash
+    roundNum++;
+    roundNumEl.textContent = roundNum;
+    // flash overlay then regenerate
+    flashAndGenerate();
+  } else {
+    messageEl.textContent = `DEFEAT — you lost the majority (${playerSeats}/${districtCount}). Press "New State" to try again.`;
+    gameOver = true;
+  }
+}
+
+// small overlay flash then regenerate with incremented round (simulate moving to new state)
+function flashAndGenerate(){
+  // draw a translucent overlay for a moment then regenerate
+  ctx.fillStyle = 'rgba(4,10,20,0.14)';
+  ctx.fillRect(0,0,W,H);
+  setTimeout(()=>{ // short pause for feedback
+    generateState();
+    updateHUD();
+  }, 700);
+}
+
+// UI updates
+function updateHUD(){
+  districtCountLabel.textContent = districtCount;
+  roundNumEl.textContent = roundNum;
+  playerSideLabel.textContent = playerIsLiberal ? 'Liberal (Red)' : 'Conservative (Blue)';
+  seatsYouEl.textContent = '-';
+  seatsOppEl.textContent = '-';
+  majorityEl.textContent = Math.floor(districtCount/2) + 1;
+}
+
+// input: dragging seeds
+let dragging = null;
+let dragOffset = {x:0,y:0};
+canvas.addEventListener('mousedown', (e)=>{
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  // pick nearest seed within radius
+  for(let i=0;i<seeds.length;i++){
+    const s = seeds[i];
+    const d2 = (s.x-mx)*(s.x-mx) + (s.y-my)*(s.y-my);
+    if(d2 < 14*14){
+      dragging = i;
+      dragOffset.x = s.x - mx;
+      dragOffset.y = s.y - my;
+      break;
+    }
+  }
+});
+window.addEventListener('mousemove', (e)=>{
+  if(dragging !== null){
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    seeds[dragging].x = clamp(mx + dragOffset.x, 0, W);
+    seeds[dragging].y = clamp(my + dragOffset.y, 0, H);
+    computeAssignment();
+    draw();
+  }
+});
+window.addEventListener('mouseup', ()=>{ dragging = null; });
+
+// controls
+callBtn.addEventListener('click', ()=>{
+  conductElection();
+});
+
+resetBtn.addEventListener('click', ()=>{
+  // reset to round 1 (user pressed New State)
+  roundNum = 1;
+  roundNumEl.textContent = roundNum;
+  gameOver = false;
+  generateState();
+});
+
+districtSlider.addEventListener('input', (e)=>{
+  districtCount = parseInt(e.target.value);
+  districtCountLabel.textContent = districtCount;
+  // rebuild seeds to match new count
+  const old = seeds.slice(0, districtCount);
+  seeds = [];
+  for(let i=0;i<districtCount;i++){
+    if(i < old.length) seeds.push(old[i]);
+    else seeds.push({ x: randRange(0.1,0.9)*W, y: randRange(0.12,0.88)*H, id: i});
+  }
+  computeAssignment();
+  draw();
+  updateHUD();
+});
+
+chooseL.addEventListener('click', ()=>{
+  playerIsLiberal = true;
+  updateHUD();
+});
+chooseC.addEventListener('click', ()=>{
+  playerIsLiberal = false;
+  updateHUD();
+});
+
+// initial run
+generateState();
+
+// pretty responsive scaling if window resized
+window.addEventListener('resize', ()=>{
+  // keep canvas static size for simplicity (you can modify to be responsive)
+  draw();
+});
+
+</script>
+</body>
+</html>
