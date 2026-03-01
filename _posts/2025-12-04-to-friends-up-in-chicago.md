@@ -32,3 +32,4 @@ Another as important pillar happens to be the sense of **value**, which is relat
 ## Implications/Remedy
 
 To say that he pillars of life are sometimes in conflict with one another might be a bit pessimistic, another way of observing this phenomenon is that they exert checks and balances on each other.
+
